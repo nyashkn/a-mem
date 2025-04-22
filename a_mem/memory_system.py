@@ -2,8 +2,8 @@ import keyword
 from typing import List, Dict, Optional, Any, Tuple
 import uuid
 from datetime import datetime
-from llm_controller import LLMController
-from retrievers import ChromaRetriever
+from a_mem.llm_controller import LLMController
+from a_mem.retrievers import ChromaRetriever
 import json
 import logging
 from rank_bm25 import BM25Okapi
@@ -95,7 +95,8 @@ class AgenticMemorySystem:
                  llm_backend: str = "openai",
                  llm_model: str = "gpt-4o-mini",
                  evo_threshold: int = 100,
-                 api_key: Optional[str] = None):  
+                 api_key: Optional[str] = None,
+                 base_url: Optional[str] = None):  
         """Initialize the memory system.
         
         Args:
@@ -119,7 +120,7 @@ class AgenticMemorySystem:
         self.retriever = ChromaRetriever(collection_name="memories")
         
         # Initialize LLM controller
-        self.llm_controller = LLMController(llm_backend, llm_model, api_key)
+        self.llm_controller = LLMController(llm_backend, llm_model, api_key, base_url)
         self.evo_cnt = 0
         self.evo_threshold = evo_threshold
 
