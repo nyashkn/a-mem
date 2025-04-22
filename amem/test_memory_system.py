@@ -1,5 +1,5 @@
 import unittest
-from a_mem.memory_system import AgenticMemorySystem, MemoryNote
+from amem.memory_system import AgenticMemorySystem, MemoryNote
 from datetime import datetime
 import json
 

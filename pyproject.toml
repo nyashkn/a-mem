@@ -1,7 +1,7 @@
 [project]
-name = "a_mem"
+name = "amem"
 version = "0.1.0"
-description = "Add your description here"
+description = "An agentic memory system for AI applications, providing semantic search and memory management capabilities"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -17,4 +17,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["a_mem"]
+packages = ["amem"]
