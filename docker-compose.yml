@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  qdrant:
+    image: qdrant/qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: always  # Ensures restart on system reboot
+
+volumes:
+  qdrant_data:
+    driver: local

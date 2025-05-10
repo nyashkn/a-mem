@@ -7,3 +7,4 @@ __pycache__/
 *.pywz
 *.pywz
 *.egg-info
+.env

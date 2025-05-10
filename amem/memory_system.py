@@ -1,23 +1,25 @@
 import keyword
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Union
 import uuid
 from datetime import datetime
+from amem.config import load_config
 from amem.llm_controller import LLMController
-from amem.retrievers import ChromaRetriever
+from amem.retrievers import ChromaRetriever, QdrantRetriever
+from amem.embedding.providers import EmbeddingProvider, LiteLLMEmbedding
+from amem.factory import EmbeddingProviderFactory, RetrieverFactory, LLMControllerFactory
 import json
 import logging
-from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import os
-from abc import ABC, abstractmethod
-from transformers import AutoModel, AutoTokenizer
 from nltk.tokenize import word_tokenize
-import pickle
-from pathlib import Path
-from litellm import completion
 import time
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,38 +93,80 @@ class AgenticMemorySystem:
     """
     
     def __init__(self, 
-                 model_name: str = 'all-MiniLM-L6-v2',
-                 llm_backend: str = "openai",
-                 llm_model: str = "gpt-4o-mini",
+                 config: Optional[Dict[str, Any]] = None,
+                 embedding_provider: Optional[EmbeddingProvider] = None,
+                 retriever: Optional[Union[QdrantRetriever, ChromaRetriever]] = None,
+                 llm_controller: Optional[LLMController] = None,
+                 model_name: Optional[str] = None,  # For backward compatibility
+                 llm_backend: Optional[str] = None,  # For backward compatibility
+                 llm_model: Optional[str] = None,  # For backward compatibility
                  evo_threshold: int = 100,
-                 api_key: Optional[str] = None,
-                 base_url: Optional[str] = None):  
+                 api_key: Optional[str] = None,  # For backward compatibility
+                 base_url: Optional[str] = None):  # For backward compatibility
         """Initialize the memory system.
         
         Args:
-            model_name: Name of the sentence transformer model
-            llm_backend: LLM backend to use (openai/ollama)
-            llm_model: Name of the LLM model
+            config: Configuration dictionary (if None, will load from .env)
+            embedding_provider: Optional pre-configured embedding provider 
+            retriever: Optional pre-configured vector database retriever
+            llm_controller: Optional pre-configured LLM controller
+            model_name: Name of the embedding model (deprecated, use config)
+            llm_backend: LLM backend to use (deprecated, use config)
+            llm_model: Name of the LLM model (deprecated, use config)
             evo_threshold: Number of memories before triggering evolution
-            api_key: API key for the LLM service
+            api_key: API key for the LLM service (deprecated, use config)
+            base_url: Base URL for LLM API (deprecated, use config)
         """
         self.memories = {}
-        
-        # Initialize ChromaDB retriever with empty collection
-        try:
-            # First try to reset the collection if it exists
-            temp_retriever = ChromaRetriever(collection_name="memories")
-            temp_retriever.client.reset()
-        except Exception as e:
-            logger.warning(f"Could not reset ChromaDB collection: {e}")
-            
-        # Create a fresh retriever instance
-        self.retriever = ChromaRetriever(collection_name="memories")
-        
-        # Initialize LLM controller
-        self.llm_controller = LLMController(llm_backend, llm_model, api_key, base_url)
         self.evo_cnt = 0
         self.evo_threshold = evo_threshold
+        
+        # Load configuration
+        if config is None:
+            config = load_config()
+        self.config = config
+        
+        # Handle backward compatibility
+        if model_name is not None:
+            self.config["embedding"] = self.config.get("embedding", {})
+            self.config["embedding"]["model"] = model_name
+        if llm_backend is not None:
+            self.config["llm"] = self.config.get("llm", {})
+            self.config["llm"]["backend"] = llm_backend
+        if llm_model is not None:
+            self.config["llm"] = self.config.get("llm", {})
+            self.config["llm"]["model"] = llm_model
+        if api_key is not None:
+            self.config["llm"] = self.config.get("llm", {})
+            self.config["llm"]["api_key"] = api_key
+        if base_url is not None:
+            self.config["llm"] = self.config.get("llm", {})
+            self.config["llm"]["base_url"] = base_url
+        
+        # Use provided embedding provider or create from factory
+        try:
+            self.embedding_provider = embedding_provider or EmbeddingProviderFactory.create(self.config)
+        except Exception as e:
+            logger.error(f"Error initializing embedding provider: {e}")
+            raise RuntimeError(f"Failed to initialize embedding provider: {e}")
+        
+        # For retriever, we need to pass the embedding provider if it's not provided
+        if retriever:
+            self.retriever = retriever
+        else:
+            try:
+                self.retriever = RetrieverFactory.create(
+                    config=self.config, 
+                    embedding_provider=self.embedding_provider
+                )
+            except Exception as e:
+                logger.error(f"Error initializing retriever: {e}")
+                # Fall back to ChromaDB if Qdrant fails
+                self.retriever = ChromaRetriever(collection_name="memories")
+                logger.warning("Using fallback ChromaDB retriever")
+            
+        # For LLM controller
+        self.llm_controller = llm_controller or LLMControllerFactory.create(self.config)
 
         # Evolution system prompt
         self._evolution_system_prompt = '''
@@ -238,53 +282,88 @@ class AgenticMemorySystem:
             kwargs['timestamp'] = time
         note = MemoryNote(content=content, **kwargs)
         
-        # Update retriever with all documents
-        evo_label, note = self.process_memory(note)
-        self.memories[note.id] = note
-        
-        # Add to ChromaDB with complete metadata
-        metadata = {
-            "id": note.id,
-            "content": note.content,
-            "keywords": note.keywords,
-            "links": note.links,
-            "retrieval_count": note.retrieval_count,
-            "timestamp": note.timestamp,
-            "last_accessed": note.last_accessed,
-            "context": note.context,
-            "evolution_history": note.evolution_history,
-            "category": note.category,
-            "tags": note.tags
-        }
-        self.retriever.add_document(note.content, metadata, note.id)
-        
-        if evo_label == True:
-            self.evo_cnt += 1
-            if self.evo_cnt % self.evo_threshold == 0:
-                self.consolidate_memories()
-        return note.id
+        try:
+            # Update retriever with all documents
+            evo_label, note = self.process_memory(note)
+            self.memories[note.id] = note
+            
+            # Add to vector database with complete metadata
+            metadata = {
+                "id": note.id,
+                "content": note.content,
+                "keywords": note.keywords,
+                "links": note.links,
+                "retrieval_count": note.retrieval_count,
+                "timestamp": note.timestamp,
+                "last_accessed": note.last_accessed,
+                "context": note.context,
+                "evolution_history": note.evolution_history,
+                "category": note.category,
+                "tags": note.tags
+            }
+            self.retriever.add_document(note.content, metadata, note.id)
+            
+            if evo_label == True:
+                self.evo_cnt += 1
+                if self.evo_cnt % self.evo_threshold == 0:
+                    self.consolidate_memories()
+            return note.id
+        except Exception as e:
+            logger.error(f"Error adding memory note: {e}")
+            # Remove from in-memory store if present but adding to vector DB failed
+            if note.id in self.memories:
+                del self.memories[note.id]
+            raise RuntimeError(f"Failed to add memory note: {e}")
     
     def consolidate_memories(self):
         """Consolidate memories: update retriever with new documents"""
-        # Reset ChromaDB collection
-        self.retriever = ChromaRetriever(collection_name="memories")
-        
-        # Re-add all memory documents with their complete metadata
-        for memory in self.memories.values():
-            metadata = {
-                "id": memory.id,
-                "content": memory.content,
-                "keywords": memory.keywords,
-                "links": memory.links,
-                "retrieval_count": memory.retrieval_count,
-                "timestamp": memory.timestamp,
-                "last_accessed": memory.last_accessed,
-                "context": memory.context,
-                "evolution_history": memory.evolution_history,
-                "category": memory.category,
-                "tags": memory.tags
-            }
-            self.retriever.add_document(memory.content, metadata, memory.id)
+        try:
+            # Get current retriever configuration
+            current_retriever_type = type(self.retriever)
+            current_collection = None
+            current_host = None
+            current_port = None
+            
+            # Extract configuration from current retriever
+            if isinstance(self.retriever, QdrantRetriever):
+                current_collection = self.retriever.collection_name
+                current_host = self.retriever.client.host
+                current_port = self.retriever.client.port
+            elif isinstance(self.retriever, ChromaRetriever):
+                current_collection = self.retriever.collection.name
+            
+            # Create a new retriever of the same type
+            if isinstance(self.retriever, QdrantRetriever):
+                self.retriever = QdrantRetriever(
+                    collection_name=current_collection,
+                    host=current_host,
+                    port=current_port,
+                    embedding_provider=self.embedding_provider
+                )
+            else:
+                # ChromaDB case
+                self.retriever = ChromaRetriever(collection_name=current_collection)
+            
+            # Re-add all memory documents with their complete metadata
+            for memory in self.memories.values():
+                metadata = {
+                    "id": memory.id,
+                    "content": memory.content,
+                    "keywords": memory.keywords,
+                    "links": memory.links,
+                    "retrieval_count": memory.retrieval_count,
+                    "timestamp": memory.timestamp,
+                    "last_accessed": memory.last_accessed,
+                    "context": memory.context,
+                    "evolution_history": memory.evolution_history,
+                    "category": memory.category,
+                    "tags": memory.tags
+                }
+                self.retriever.add_document(memory.content, metadata, memory.id)
+                
+            logger.info(f"Successfully consolidated {len(self.memories)} memories")
+        except Exception as e:
+            logger.error(f"Error consolidating memories: {e}")
     
     def find_related_memories(self, query: str, k: int = 5) -> Tuple[str, List[int]]:
         """Find related memories using ChromaDB retrieval"""
@@ -317,32 +396,36 @@ class AgenticMemorySystem:
         """Find related memories using ChromaDB retrieval in raw format"""
         if not self.memories:
             return ""
+        
+        try:
+            # Get results from ChromaDB
+            results = self.retriever.search(query, k)
             
-        # Get results from ChromaDB
-        results = self.retriever.search(query, k)
-        
-        # Convert to list of memories
-        memory_str = ""
-        
-        if 'ids' in results and results['ids'] and len(results['ids']) > 0:
-            for i, doc_id in enumerate(results['ids'][0][:k]):
-                if i < len(results['metadatas'][0]):
-                    # Get metadata from ChromaDB results
-                    metadata = results['metadatas'][0][i]
-                    
-                    # Add main memory info
-                    memory_str += f"talk start time:{metadata.get('timestamp', '')}\tmemory content: {metadata.get('content', '')}\tmemory context: {metadata.get('context', '')}\tmemory keywords: {str(metadata.get('keywords', []))}\tmemory tags: {str(metadata.get('tags', []))}\n"
-                    
-                    # Add linked memories if available
-                    links = metadata.get('links', [])
-                    j = 0
-                    for link_id in links:
-                        if link_id in self.memories and j < k:
-                            neighbor = self.memories[link_id]
-                            memory_str += f"talk start time:{neighbor.timestamp}\tmemory content: {neighbor.content}\tmemory context: {neighbor.context}\tmemory keywords: {str(neighbor.keywords)}\tmemory tags: {str(neighbor.tags)}\n"
-                            j += 1
-                            
-        return memory_str
+            # Convert to list of memories
+            memory_str = ""
+            
+            if 'ids' in results and results['ids'] and len(results['ids']) > 0:
+                for i, doc_id in enumerate(results['ids'][0][:k]):
+                    if i < len(results['metadatas'][0]):
+                        # Get metadata from ChromaDB results
+                        metadata = results['metadatas'][0][i]
+                        
+                        # Add main memory info
+                        memory_str += f"talk start time:{metadata.get('timestamp', '')}\tmemory content: {metadata.get('content', '')}\tmemory context: {metadata.get('context', '')}\tmemory keywords: {str(metadata.get('keywords', []))}\tmemory tags: {str(metadata.get('tags', []))}\n"
+                        
+                        # Add linked memories if available
+                        links = metadata.get('links', [])
+                        j = 0
+                        for link_id in links:
+                            if link_id in self.memories and j < k:
+                                neighbor = self.memories[link_id]
+                                memory_str += f"talk start time:{neighbor.timestamp}\tmemory content: {neighbor.content}\tmemory context: {neighbor.context}\tmemory keywords: {str(neighbor.keywords)}\tmemory tags: {str(neighbor.tags)}\n"
+                                j += 1
+                                
+            return memory_str
+        except Exception as e:
+            logger.error(f"Error in find_related_memories_raw: {e}")
+            return ""
 
     def read(self, memory_id: str) -> Optional[MemoryNote]:
         """Retrieve a memory note by its ID.
@@ -390,11 +473,14 @@ class AgenticMemorySystem:
             "tags": note.tags
         }
         
-        # Delete and re-add to update
-        self.retriever.delete_document(memory_id)
-        self.retriever.add_document(document=note.content, metadata=metadata, doc_id=memory_id)
-        
-        return True
+        try:
+            # Delete and re-add to update
+            self.retriever.delete_document(memory_id)
+            self.retriever.add_document(document=note.content, metadata=metadata, doc_id=memory_id)
+            return True
+        except Exception as e:
+            logger.error(f"Error updating memory: {e}")
+            return False
     
     def delete(self, memory_id: str) -> bool:
         """Delete a memory note by its ID.
@@ -406,11 +492,15 @@ class AgenticMemorySystem:
             bool: True if memory was deleted, False if not found
         """
         if memory_id in self.memories:
-            # Delete from ChromaDB
-            self.retriever.delete_document(memory_id)
-            # Delete from local storage
-            del self.memories[memory_id]
-            return True
+            try:
+                # Delete from ChromaDB
+                self.retriever.delete_document(memory_id)
+                # Delete from local storage
+                del self.memories[memory_id]
+                return True
+            except Exception as e:
+                logger.error(f"Error deleting memory: {e}")
+                return False
         return False
     
     def _search_raw(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
@@ -426,9 +516,13 @@ class AgenticMemorySystem:
         Returns:
             List[Dict[str, Any]]: Raw search results from ChromaDB
         """
-        results = self.retriever.search(query, k)
-        return [{'id': doc_id, 'score': score} 
-                for doc_id, score in zip(results['ids'][0], results['distances'][0])]
+        try:
+            results = self.retriever.search(query, k)
+            return [{'id': doc_id, 'score': score} 
+                    for doc_id, score in zip(results['ids'][0], results['distances'][0])]
+        except Exception as e:
+            logger.error(f"Error in _search_raw: {e}")
+            return []
                 
     def search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """Search for memories using a hybrid retrieval approach.
@@ -450,43 +544,30 @@ class AgenticMemorySystem:
                 - score: Similarity score
                 - metadata: Additional memory metadata
         """
-        # Get results from ChromaDB
-        chroma_results = self.retriever.search(query, k)
-        memories = []
-        
-        # Process ChromaDB results
-        for i, doc_id in enumerate(chroma_results['ids'][0]):
-            memory = self.memories.get(doc_id)
-            if memory:
-                memories.append({
-                    'id': doc_id,
-                    'content': memory.content,
-                    'context': memory.context,
-                    'keywords': memory.keywords,
-                    'score': chroma_results['distances'][0][i]
-                })
-                
-        # Get results from embedding retriever
-        indices = self.retriever.search(query, k)
-        
-        # Combine results with deduplication
-        seen_ids = set(m['id'] for m in memories)
-        for idx in indices:
-            document = self.retriever.documents[idx]
-            memory_id = self.retriever.documents.index(document)
-            if document and document not in seen_ids:
-                memory = self.memories.get(memory_id)
+        try:
+            # Get results from ChromaDB
+            chroma_results = self.retriever.search(query, k)
+            memories = []
+            
+            # Process ChromaDB results
+            for i, doc_id in enumerate(chroma_results['ids'][0]):
+                memory = self.memories.get(doc_id)
                 if memory:
                     memories.append({
-                        'id': idx,
-                        'content': document,
+                        'id': doc_id,
+                        'content': memory.content,
                         'context': memory.context,
                         'keywords': memory.keywords,
-                        'score': result.get('score', 0.0)
+                        'score': chroma_results['distances'][0][i]
                     })
-                    seen_ids.add(memory_id)
-                    
-        return memories[:k]
+            
+            # Note: The original hybrid search approach had issues with undefined variables
+            # and is removed as it's not compatible with the current retriever interface.
+            # Return just the vector search results.
+            return memories[:k]
+        except Exception as e:
+            logger.error(f"Error in search: {e}")
+            return []
     
     def _search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """Search for memories using a hybrid retrieval approach.
@@ -508,42 +589,46 @@ class AgenticMemorySystem:
                 - score: Similarity score
                 - metadata: Additional memory metadata
         """
-        # Get results from ChromaDB
-        chroma_results = self.retriever.search(query, k)
-        memories = []
-        
-        # Process ChromaDB results
-        for i, doc_id in enumerate(chroma_results['ids'][0]):
-            memory = self.memories.get(doc_id)
-            if memory:
-                memories.append({
-                    'id': doc_id,
-                    'content': memory.content,
-                    'context': memory.context,
-                    'keywords': memory.keywords,
-                    'score': chroma_results['distances'][0][i]
-                })
-                
-        # Get results from embedding retriever
-        embedding_results = self.retriever.search(query, k)
-        
-        # Combine results with deduplication
-        seen_ids = set(m['id'] for m in memories)
-        for result in embedding_results:
-            memory_id = result.get('id')
-            if memory_id and memory_id not in seen_ids:
-                memory = self.memories.get(memory_id)
+        try:
+            # Get results from ChromaDB
+            chroma_results = self.retriever.search(query, k)
+            memories = []
+            
+            # Process ChromaDB results
+            for i, doc_id in enumerate(chroma_results['ids'][0]):
+                memory = self.memories.get(doc_id)
                 if memory:
                     memories.append({
-                        'id': memory_id,
+                        'id': doc_id,
                         'content': memory.content,
                         'context': memory.context,
                         'keywords': memory.keywords,
-                        'score': result.get('score', 0.0)
+                        'score': chroma_results['distances'][0][i]
                     })
-                    seen_ids.add(memory_id)
                     
-        return memories[:k]
+            # Get results from embedding retriever
+            embedding_results = self.retriever.search(query, k)
+            
+            # Combine results with deduplication
+            seen_ids = set(m['id'] for m in memories)
+            for result in embedding_results:
+                memory_id = result.get('id')
+                if memory_id and memory_id not in seen_ids:
+                    memory = self.memories.get(memory_id)
+                    if memory:
+                        memories.append({
+                            'id': memory_id,
+                            'content': memory.content,
+                            'context': memory.context,
+                            'keywords': memory.keywords,
+                            'score': result.get('score', 0.0)
+                        })
+                        seen_ids.add(memory_id)
+                        
+            return memories[:k]
+        except Exception as e:
+            logger.error(f"Error in _search: {e}")
+            return []
 
     def search_agentic(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """Search for memories using ChromaDB retrieval."""

@@ -4,13 +4,56 @@ from datetime import datetime
 import json
 
 class TestAgenticMemorySystem(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Set up resources before any tests run."""
+        # Check if Qdrant is running
+        import requests
+        try:
+            response = requests.get("http://localhost:6333/healthz")
+            if response.status_code != 200:
+                print("⚠️ Warning: Qdrant might not be running properly. Tests may fail.")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not connect to Qdrant: {e}")
+            print("Make sure to start Qdrant using 'docker-compose up -d'")
+            
     def setUp(self):
         """Set up test environment before each test."""
+        # Use test-specific collection to avoid conflicts with production data
+        self.test_collection = "test_memories_unit_tests"
+        
         self.memory_system = AgenticMemorySystem(
-            model_name='all-MiniLM-L6-v2',
-            llm_backend="openai",
-            llm_model="gpt-4o-mini"
+            config={
+                "embedding": {
+                    "provider": "litellm",
+                    "model": "bedrock/cohere.embed-multilingual-v3"
+                },
+                "llm": {
+                    "backend": "openai",
+                    "model": "meta-llama/llama-4-maverick",
+                    "base_url": "https://openrouter.ai/api/v1"
+                },
+                "vector_db": {
+                    "type": "qdrant",
+                    "qdrant": {
+                        "collection": self.test_collection,  # Use test collection
+                        "host": "localhost",
+                        "port": 6333
+                    }
+                }
+            }
         )
+        
+    def tearDown(self):
+        """Clean up after each test."""
+        # Clean up test collection to avoid data persistence
+        try:
+            from qdrant_client import QdrantClient
+            client = QdrantClient(host="localhost", port=6333)
+            if self.test_collection in [c.name for c in client.get_collections().collections]:
+                client.delete_collection(self.test_collection)
+        except Exception as e:
+            print(f"Could not clean up Qdrant test collection: {e}")
         
     def test_create_memory(self):
         """Test creating a new memory with complete metadata."""
