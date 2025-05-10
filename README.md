@@ -54,45 +54,98 @@ Empirical experiments conducted on six foundation models demonstrate superior pe
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/agiresearch/A-mem.git
-cd AgenticMemory
+git clone https://github.com/nyashkn/A-mem.git .
 ```
 
-2. Install dependencies:
-Option 1: Using venv (Python virtual environment)
+> **Note:** This is a fork of the original project which can be found at [https://github.com/agiresearch/A-mem.git](https://github.com/agiresearch/A-mem.git). We recommend checking out the original repository for the latest research developments.
+
+2. Install dependencies using uv (recommended):
 ```bash
-# Create and activate virtual environment
-python -m venv .venv
+# Install uv if you don't have it
+curl -sSf https://raw.githubusercontent.com/astral-sh/uv/main/install.sh | bash
+
+# Create and activate virtual environment with uv
+uv venv .venv
 source .venv/bin/activate  # Linux/Mac
 .venv\Scripts\activate     # Windows
 
-# Install dependencies
-pip install -r requirements.txt
+# Install package in development mode with uv
+uv pip install -e .
 ```
 
-Option 2: Using Conda
+3. Set up Qdrant using Docker:
 ```bash
-# Create and activate conda environment
-conda create -n myenv python=3.9
-conda activate myenv
-
-# Install dependencies
-pip install -r requirements.txt
+# Start Qdrant vector database
+docker-compose up -d
 ```
 
-3. Usage Examples 💡
+4. Configure environment variables:
+Create a `.env` file in the project root with the following settings (or modify the existing one):
+
+```bash
+# Vector Database (qdrant)
+VECTOR_DB_TYPE=qdrant
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+
+# Embedding Provider (AWS Bedrock with Cohere)
+EMBEDDING_PROVIDER=litellm
+EMBEDDING_MODEL=bedrock/cohere.embed-multilingual-v3
+AWS_REGION_NAME=your_aws_region
+AWS_ACCESS_KEY_ID=your_aws_access_key
+AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+
+# LLM Configuration (OpenRouter with LLaMa)
+LLM_BACKEND=openai
+LLM_MODEL=meta-llama/llama-4-maverick
+LLM_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_API_KEY=your_openrouter_api_key
+
+# Collection name
+QDRANT_COLLECTION=memories
+```
+
+5. Setup Verification ✅
+
+Before using the system, you can verify that all components are working correctly:
+
+```bash
+python utils/verify_setup.py
+```
+
+This will check:
+- Qdrant database connection
+- Embedding functionality with AWS Bedrock
+- LLM integration with OpenRouter
+
+If you encounter dimension errors with Qdrant collections, you can clean them up:
+
+```bash
+python utils/cleanup_collections.py
+```
+
+6. Usage Examples 💡
 
 Here's how to use the Agentic Memory system for basic operations:
 
 ```python
-from memory_system import AgenticMemorySystem
+from amem.memory_system import AgenticMemorySystem
 
 # Initialize the memory system 🚀
 memory_system = AgenticMemorySystem(
-    model_name='all-MiniLM-L6-v2',  # Embedding model for ChromaDB
-    llm_backend="openai",           # LLM backend (openai/ollama)
-    llm_model="gpt-4o-mini"         # LLM model name
+    config={
+        "embedding": {
+            "model": "bedrock/cohere.embed-multilingual-v3"  # AWS Bedrock embedding model
+        },
+        "llm": {
+            "backend": "openai",           # LLM backend (openai/ollama/litellm)
+            "model": "meta-llama/llama-4-maverick"  # Model name in OpenRouter format
+        }
+    }
 )
+
+# For a basic example, you can run:
+# python evals/basic.py
 
 # Add Memories ➕
 # Simple addition
@@ -158,6 +211,8 @@ memory_system.delete(memory_id)
 4. **Multiple LLM Backends** 🤖
    - OpenAI (GPT-4, GPT-3.5)
    - Ollama (for local deployment)
+   - LiteLLM (unified API for various providers)
+   - AWS Bedrock for embeddings
 
 ### Best Practices 💪
 
