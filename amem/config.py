@@ -20,8 +20,8 @@ def load_config() -> Dict[str, Any]:
         
         # Embedding configuration
         "embedding": {
-            "provider": os.getenv("EMBEDDING_PROVIDER", "sentence_transformer"),
-            "model": os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+            "provider": os.getenv("EMBEDDING_PROVIDER", "litellm"),
+            "model": os.getenv("EMBEDDING_MODEL", "bedrock/cohere.embed-multilingual-v3"),
             "api_key": os.getenv("EMBEDDING_API_KEY")
         },
         
