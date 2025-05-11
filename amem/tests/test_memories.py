@@ -29,7 +29,11 @@ class TestAgenticMemoryWithCloudServices(unittest.TestCase):
         # Check if Docker/Qdrant is running
         import requests
         try:
-            response = requests.get("http://localhost:6333/healthz")
+            # Use port from environment variable or default to 7333
+            from os import environ
+            port = int(environ.get("QDRANT_PORT", "7333"))
+            host = environ.get("QDRANT_HOST", "localhost")
+            response = requests.get(f"http://{host}:{port}/healthz")
             if response.status_code != 200:
                 logger.warning("Qdrant might not be running properly. Tests may fail.")
         except Exception as e:

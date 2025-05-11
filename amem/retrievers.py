@@ -109,7 +109,7 @@ class QdrantRetriever:
     def __init__(self, 
                 collection_name: str = "memories", 
                 host: str = "localhost", 
-                port: int = 6333,
+                port: int = 7333,
                 embedding_provider: Optional[EmbeddingProvider] = None,
                 vector_size: int = 1024):
         """Initialize Qdrant retriever.

@@ -103,7 +103,7 @@ This test:
 1. **Qdrant Connection Errors**:
    - Verify Docker is running: `docker ps`
    - Check Qdrant container status: `docker logs a-mem-qdrant-1`
-   - Test Qdrant API directly: `curl http://localhost:6333/healthz`
+   - Test Qdrant API directly: `curl http://localhost:7333/healthz`
 
 2. **Cloud API Failures**:
    - Check API keys in `.env` file
@@ -129,7 +129,7 @@ To clean up all test collections and start fresh:
 
 ```python
 from qdrant_client import QdrantClient
-client = QdrantClient(host="localhost", port=6333)
+client = QdrantClient(host="localhost", port=7333)
 for collection in ["test_memories", "test_memories_unit_tests", "example_memories"]:
     try:
         client.delete_collection(collection)

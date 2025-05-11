@@ -86,7 +86,7 @@ Create a `.env` file in the project root with the following settings (or modify 
 # Vector Database (qdrant)
 VECTOR_DB_TYPE=qdrant
 QDRANT_HOST=localhost
-QDRANT_PORT=6333
+QDRANT_PORT=7333
 
 # Embedding Provider (AWS Bedrock with Cohere)
 EMBEDDING_PROVIDER=litellm

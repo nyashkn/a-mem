@@ -13,7 +13,7 @@ def load_config() -> Dict[str, Any]:
             "type": os.getenv("VECTOR_DB_TYPE", "qdrant"),
             "qdrant": {
                 "host": os.getenv("QDRANT_HOST", "localhost"),
-                "port": int(os.getenv("QDRANT_PORT", "6333")),
+                "port": int(os.getenv("QDRANT_PORT", "7333")),
                 "collection": os.getenv("QDRANT_COLLECTION", "memories")
             }
         },

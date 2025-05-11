@@ -30,7 +30,9 @@ def check_qdrant():
     logger.info("🔍 Checking Qdrant connection...")
     try:
         import requests
-        response = requests.get("http://localhost:6333/healthz")
+        # Use port from environment variable or default to 7333
+        qdrant_port = int(os.getenv("QDRANT_PORT", "7333"))
+        response = requests.get(f"http://localhost:{qdrant_port}/healthz")
         if response.status_code == 200:
             logger.info("✅ Qdrant is running properly")
             return True
@@ -116,7 +118,10 @@ def check_embeddings():
         # Clean up test collection
         try:
             from qdrant_client import QdrantClient
-            client = QdrantClient(host="localhost", port=6333)
+            # Use port from environment variable or default to 7333
+            qdrant_host = os.getenv("QDRANT_HOST", "localhost")
+            qdrant_port = int(os.getenv("QDRANT_PORT", "7333"))
+            client = QdrantClient(host=qdrant_host, port=qdrant_port)
             if "verification_test" in [c.name for c in client.get_collections().collections]:
                 client.delete_collection("verification_test")
         except Exception as e:

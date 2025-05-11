@@ -18,17 +18,20 @@ import time
 import argparse
 from amem.memory_system import AgenticMemorySystem
 from dotenv import load_dotenv
+from os import environ
 
 def check_qdrant_running():
     """Check if Qdrant is running via simple HTTP request"""
     try:
         import requests
-        response = requests.get("http://localhost:6333/healthz")
+        port = int(environ.get("QDRANT_PORT", "7333"))
+        host = environ.get("QDRANT_HOST", "localhost")
+        response = requests.get(f"http://{host}:{port}/healthz")
         if response.status_code == 200:
             print("✅ Qdrant is running")
             return True
         else:
-            print("❌ Qdrant is responding but may have issues (status code: {response.status_code})")
+            print(f"❌ Qdrant is responding but may have issues (status code: {response.status_code})")
             return False
     except Exception as e:
         print(f"❌ Qdrant is not running or not reachable: {e}")
@@ -54,8 +57,8 @@ def main():
                     "type": "qdrant",
                     "qdrant": {
                         "collection": "example_memories",  # Use specific collection for example script
-                        "host": "localhost",
-                        "port": 6333
+                        "host": environ.get("QDRANT_HOST", "localhost"),
+                        "port": int(environ.get("QDRANT_PORT", "7333"))
                     }
                 }
                 # Other config settings will be loaded from .env
@@ -152,7 +155,9 @@ def cleanup_example_data():
     try:
         print("\n🧹 Cleaning up example data...")
         from qdrant_client import QdrantClient
-        client = QdrantClient(host="localhost", port=6333)
+        port = int(environ.get("QDRANT_PORT", "7333"))
+        host = environ.get("QDRANT_HOST", "localhost")
+        client = QdrantClient(host=host, port=port)
         
         collections = [c.name for c in client.get_collections().collections]
         if "example_memories" in collections:

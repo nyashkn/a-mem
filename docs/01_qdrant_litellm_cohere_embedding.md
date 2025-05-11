@@ -41,7 +41,7 @@ Create a `.env` file with your settings:
 # Vector Database (qdrant)
 VECTOR_DB_TYPE=qdrant
 QDRANT_HOST=localhost
-QDRANT_PORT=6333
+QDRANT_PORT=7333
 QDRANT_COLLECTION=memories
 
 # Embedding Provider (AWS Bedrock with Cohere)

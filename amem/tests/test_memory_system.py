@@ -10,7 +10,11 @@ class TestAgenticMemorySystem(unittest.TestCase):
         # Check if Qdrant is running
         import requests
         try:
-            response = requests.get("http://localhost:6333/healthz")
+            # Use port from environment variable or default to 7333
+            from os import environ
+            port = int(environ.get("QDRANT_PORT", "7333"))
+            host = environ.get("QDRANT_HOST", "localhost")
+            response = requests.get(f"http://{host}:{port}/healthz")
             if response.status_code != 200:
                 print("⚠️ Warning: Qdrant might not be running properly. Tests may fail.")
         except Exception as e:
@@ -38,7 +42,7 @@ class TestAgenticMemorySystem(unittest.TestCase):
                     "qdrant": {
                         "collection": self.test_collection,  # Use test collection
                         "host": "localhost",
-                        "port": 6333
+                        "port": 7333
                     }
                 }
             }
@@ -49,7 +53,7 @@ class TestAgenticMemorySystem(unittest.TestCase):
         # Clean up test collection to avoid data persistence
         try:
             from qdrant_client import QdrantClient
-            client = QdrantClient(host="localhost", port=6333)
+            client = QdrantClient(host="localhost", port=7333)
             if self.test_collection in [c.name for c in client.get_collections().collections]:
                 client.delete_collection(self.test_collection)
         except Exception as e:

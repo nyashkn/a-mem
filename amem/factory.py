@@ -105,7 +105,7 @@ class RetrieverFactory:
                 # Use environment variable for collection if available
                 collection_name = os.getenv("QDRANT_COLLECTION") or qdrant_config.get("collection", "memories")
                 host = qdrant_config.get("host", "localhost")
-                port = qdrant_config.get("port", 6333)
+                port = qdrant_config.get("port", 7333)
                 
                 # Initialize Qdrant retriever
                 retriever = QdrantRetriever(

@@ -16,7 +16,11 @@ def cleanup_collections():
     """Remove existing collections in Qdrant"""
     try:
         # Connect to Qdrant
-        client = QdrantClient(host="localhost", port=6333)
+        # Use port from environment variable or default to 7333
+        from os import environ
+        port = int(environ.get("QDRANT_PORT", "7333"))
+        host = environ.get("QDRANT_HOST", "localhost")
+        client = QdrantClient(host=host, port=port)
         
         # Get list of collections
         collections = client.get_collections()

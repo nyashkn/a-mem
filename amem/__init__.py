@@ -2,12 +2,19 @@
 
 from .memory_system import AgenticMemorySystem
 from .llm_controller import LLMController
-from .retrievers import ChromaRetriever
+from .retrievers import QdrantRetriever
+from .embedding.providers import EmbeddingProvider, LiteLLMEmbedding
+from .factory import EmbeddingProviderFactory, RetrieverFactory, LLMControllerFactory
 
 __version__ = "0.1.0"
 
 __all__ = [
     'AgenticMemorySystem',
     'LLMController',
-    'ChromaRetriever'
-] 
+    'QdrantRetriever',
+    'EmbeddingProvider',
+    'LiteLLMEmbedding',
+    'EmbeddingProviderFactory',
+    'RetrieverFactory',
+    'LLMControllerFactory'
+]
