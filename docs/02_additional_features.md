@@ -393,3 +393,10 @@ Recall@k: Percentage of all relevant memories retrieved in top-k
 Mean Reciprocal Rank (MRR): Position of first relevant result
 nDCG: Measures ranking quality with position-weighted relevance
 Novel Information Rate: Percentage of unique information in results
+
+Testing approach: https://github.com/WujiangXu/AgenticMemory/blob/main/test_advanced.py
+
+https://github.com/getzep/graphiti -> Could be better.
+
+## 9. Search note capabilities
+- Send multiple queries with 1 request i.e queries [query_1, query_2, query_3] becuase there is a chance that the embeedings for a certain query would possible have only 1 locked up perspective and so the query_2 could be for adjacents
