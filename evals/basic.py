@@ -191,6 +191,16 @@ def main():
                 linked_memory = memory_system.read(link)
                 if linked_memory:
                     print(f"  - Linked to: '{linked_memory.content[:50]}...'")
+                    
+            # Show any events related to this memory's evolution
+            evolution_events = [e for e in memory_system.events 
+                               if e.event_type.startswith("memory_evolution") 
+                               and e.details.get("memory_id") == memory4_id]
+            
+            if evolution_events:
+                print(f"    Evolution events: {len(evolution_events)} events recorded")
+                for event in evolution_events[:2]:  # Show first 2 events 
+                    print(f"    - {event.event_type}: {event.timestamp}")
         else:
             print("Memory hasn't formed connections yet (evolution can take time)")
     except Exception as e:

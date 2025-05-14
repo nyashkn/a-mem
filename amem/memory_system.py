@@ -1,7 +1,9 @@
 import keyword
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Union, Literal
 import uuid
 from datetime import datetime
+from enum import Enum
+from pydantic import BaseModel, Field, ConfigDict
 from amem.config import load_config
 from amem.llm_controller import LLMController
 from amem.retrievers import FalkorDBRetriever
@@ -23,64 +25,93 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-class MemoryNote:
+class RelationshipType(str, Enum):
+    """Base relationship types, extensible by the mem_librarian."""
+    CONTAINS_ENTITY = "CONTAINS_ENTITY"  # Memory contains reference to entity
+    MEMORY_LINKS = "MEMORY_LINKS"  # Memory links to another memory
+    REASONING_PATH = "REASONING_PATH"  # Memory is part of a reasoning path
+    SIMILAR_TO = "SIMILAR_TO"  # Memory is semantically similar to another
+    CONTRADICTS = "CONTRADICTS"  # Memory contradicts another memory
+    SUPPORTS = "SUPPORTS"  # Memory supports/reinforces another memory
+    TEMPORAL_FOLLOWS = "TEMPORAL_FOLLOWS"  # Memory chronologically follows another
+    QUERY_RETRIEVED = "QUERY_RETRIEVED"  # Memory was retrieved by this query
+
+
+class MemoryNote(BaseModel):
     """A memory note that represents a single unit of information in the memory system.
     
     This class encapsulates all metadata associated with a memory, including:
     - Core content and identifiers
     - Temporal information (creation and access times)
     - Semantic metadata (keywords, context, tags)
-    - Relationship data (links to other memories)
     - Usage statistics (retrieval count)
-    - Evolution tracking (history of changes)
     """
     
-    def __init__(self, 
-                 content: str,
-                 id: Optional[str] = None,
-                 keywords: Optional[List[str]] = None,
-                 links: Optional[Dict] = None,
-                 retrieval_count: Optional[int] = None,
-                 timestamp: Optional[str] = None,
-                 last_accessed: Optional[str] = None,
-                 context: Optional[str] = None,
-                 evolution_history: Optional[List] = None,
-                 category: Optional[str] = None,
-                 tags: Optional[List[str]] = None):
-        """Initialize a new memory note with its associated metadata.
+    # Core content and ID
+    content: str
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    
+    # Semantic metadata
+    keywords: List[str] = Field(default_factory=list)
+    links: List[str] = Field(default_factory=list)  # Legacy field - will use graph relationships
+    context: str = "General"
+    category: str = "Uncategorized"
+    tags: List[str] = Field(default_factory=list)
+    
+    # Temporal information
+    timestamp: str = Field(default_factory=lambda: datetime.now().strftime("%Y%m%d%H%M"))
+    last_accessed: str = Field(default_factory=lambda: datetime.now().strftime("%Y%m%d%H%M"))
+    
+    # Usage data
+    retrieval_count: int = 0
+    
+    # Make the model immutable
+    model_config = ConfigDict(frozen=True)
+    
+    def to_metadata_dict(self) -> Dict[str, Any]:
+        """Convert to a dictionary suitable for database storage."""
+        return self.model_dump()
+    
+    @classmethod
+    def from_metadata_dict(cls, metadata: Dict[str, Any]) -> "MemoryNote":
+        """Create a MemoryNote from metadata dictionary."""
+        # Process complex types if they're stored as JSON strings
+        processed_metadata = {}
+        for key, value in metadata.items():
+            if isinstance(value, str) and (value.startswith('[') or value.startswith('{')):
+                try:
+                    processed_metadata[key] = json.loads(value)
+                except:
+                    processed_metadata[key] = value
+            else:
+                processed_metadata[key] = value
         
-        Args:
-            content (str): The main text content of the memory
-            id (Optional[str]): Unique identifier for the memory. If None, a UUID will be generated
-            keywords (Optional[List[str]]): Key terms extracted from the content
-            links (Optional[Dict]): References to related memories
-            retrieval_count (Optional[int]): Number of times this memory has been accessed
-            timestamp (Optional[str]): Creation time in format YYYYMMDDHHMM
-            last_accessed (Optional[str]): Last access time in format YYYYMMDDHHMM
-            context (Optional[str]): The broader context or domain of the memory
-            evolution_history (Optional[List]): Record of how the memory has evolved
-            category (Optional[str]): Classification category
-            tags (Optional[List[str]]): Additional classification tags
-        """
-        # Core content and ID
-        self.content = content
-        self.id = id or str(uuid.uuid4())
-        
-        # Semantic metadata
-        self.keywords = keywords or []
-        self.links = links or []
-        self.context = context or "General"
-        self.category = category or "Uncategorized"
-        self.tags = tags or []
-        
-        # Temporal information
-        current_time = datetime.now().strftime("%Y%m%d%H%M")
-        self.timestamp = timestamp or current_time
-        self.last_accessed = last_accessed or current_time
-        
-        # Usage and evolution data
-        self.retrieval_count = retrieval_count or 0
-        self.evolution_history = evolution_history or []
+        return cls(**processed_metadata)
+
+
+class Entity(BaseModel):
+    """Entity identified across memories."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    type: str  # "PERSON", "ORGANIZATION", "PROJECT", "LOCATION", "CONCEPT"
+    aliases: List[str] = Field(default_factory=list)
+    first_seen: str = Field(default_factory=lambda: datetime.now().strftime("%Y%m%d%H%M"))
+    confidence: float = 1.0
+    
+    # Make the model immutable
+    model_config = ConfigDict(frozen=True)
+
+
+class MemoryEvent(BaseModel):
+    """Event log entry for memory system operations."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: str = Field(default_factory=lambda: datetime.now().strftime("%Y%m%d%H%M"))
+    event_type: str  # "query", "evolution", "relationship_creation", etc.
+    details: Dict[str, Any] = Field(default_factory=dict)  # Flexible event details
+    agent_id: Optional[str] = None  # Which agent/user triggered this event
+    
+    # Make the model immutable
+    model_config = ConfigDict(frozen=True)
 
 class AgenticMemorySystem:
     """Core memory system that manages memory notes and their evolution.
@@ -145,6 +176,9 @@ class AgenticMemorySystem:
             
         # For LLM controller
         self.llm_controller = llm_controller or LLMControllerFactory.create(self.config)
+        
+        # Event store
+        self.events = []
 
         # Evolution system prompt
         self._evolution_system_prompt = '''
@@ -255,41 +289,56 @@ class AgenticMemorySystem:
 
     def add_note(self, content: str, time: str = None, **kwargs) -> str:
         """Add a new memory note"""
-        # Create MemoryNote without llm_controller
+        # Create MemoryNote using Pydantic
+        note_params = {"content": content}
         if time is not None:
-            kwargs['timestamp'] = time
-        note = MemoryNote(content=content, **kwargs)
+            note_params['timestamp'] = time
+        note_params.update(kwargs)
         
         try:
-            # Update retriever with all documents
-            evo_label, note = self.process_memory(note)
-            self.memories[note.id] = note
+            # Create immutable note
+            note = MemoryNote(**note_params)
             
-            # Add to vector database with complete metadata
-            metadata = {
-                "id": note.id,
-                "content": note.content,
-                "keywords": note.keywords,
-                "links": note.links,
-                "retrieval_count": note.retrieval_count,
-                "timestamp": note.timestamp,
-                "last_accessed": note.last_accessed,
-                "context": note.context,
-                "evolution_history": note.evolution_history,
-                "category": note.category,
-                "tags": note.tags
-            }
-            self.retriever.add_document(note.content, metadata, note.id)
+            # Extract metadata and analyze content if needed
+            if not note.keywords and not kwargs.get('keywords'):
+                # Analyze content using LLM
+                analysis = self.analyze_content(content)
+                # Create a new note with the analysis results
+                note = MemoryNote(**{
+                    **note.model_dump(),
+                    "keywords": analysis.get("keywords", []),
+                    "context": analysis.get("context", note.context),
+                    "tags": analysis.get("tags", note.tags),
+                })
             
-            if evo_label == True:
+            # Process for evolution
+            evo_label, processed_note = self.process_memory(note)
+            
+            # Store the processed note
+            self.memories[processed_note.id] = processed_note
+            
+            # Add to vector database
+            metadata = processed_note.to_metadata_dict()
+            self.retriever.add_document(processed_note.content, metadata, processed_note.id)
+            
+            # Record memory creation event
+            self.add_memory_event(
+                "memory_creation",
+                processed_note.id,
+                {}
+            )
+            
+            # Check if evolution threshold reached
+            if evo_label:
                 self.evo_cnt += 1
                 if self.evo_cnt % self.evo_threshold == 0:
                     self.consolidate_memories()
-            return note.id
+                    
+            return processed_note.id
         except Exception as e:
             logger.error(f"Error adding memory note: {e}")
             # Remove from in-memory store if present but adding to vector DB failed
-            if note.id in self.memories:
+            if 'note' in locals() and hasattr(note, 'id') and note.id in self.memories:
                 del self.memories[note.id]
             raise RuntimeError(f"Failed to add memory note: {e}")
     
@@ -313,19 +362,8 @@ class AgenticMemorySystem:
             
             # Re-add all memory documents with their complete metadata
             for memory in self.memories.values():
-                metadata = {
-                    "id": memory.id,
-                    "content": memory.content,
-                    "keywords": memory.keywords,
-                    "links": memory.links,
-                    "retrieval_count": memory.retrieval_count,
-                    "timestamp": memory.timestamp,
-                    "last_accessed": memory.last_accessed,
-                    "context": memory.context,
-                    "evolution_history": memory.evolution_history,
-                    "category": memory.category,
-                    "tags": memory.tags
-                }
+                # Convert Pydantic model to metadata dict
+                metadata = memory.to_metadata_dict()
                 self.retriever.add_document(memory.content, metadata, memory.id)
                 
             logger.info(f"Successfully consolidated {len(self.memories)} memories")
@@ -420,34 +458,70 @@ class AgenticMemorySystem:
             
         note = self.memories[memory_id]
         
-        # Update fields
+        # Create a new immutable object with updated fields
+        # First, get existing values
+        update_dict = note.model_dump()
+        
+        # Then apply updates for fields that exist
         for key, value in kwargs.items():
-            if hasattr(note, key):
-                setattr(note, key, value)
-                
-        # Update in vector database
-        metadata = {
-            "id": note.id,
-            "content": note.content,
-            "keywords": note.keywords,
-            "links": note.links,
-            "retrieval_count": note.retrieval_count,
-            "timestamp": note.timestamp,
-            "last_accessed": note.last_accessed,
-            "context": note.context,
-            "evolution_history": note.evolution_history,
-            "category": note.category,
-            "tags": note.tags
-        }
+            if key in update_dict:
+                update_dict[key] = value
+        
+        # Create new immutable note with updates
+        updated_note = MemoryNote(**update_dict)
         
         try:
-            # Delete and re-add to update
+            # Delete and re-add to update in vector database
             self.retriever.delete_document(memory_id)
-            self.retriever.add_document(document=note.content, metadata=metadata, doc_id=memory_id)
+            self.retriever.add_document(
+                document=updated_note.content, 
+                metadata=updated_note.to_metadata_dict(), 
+                doc_id=memory_id
+            )
+            
+            # Update in-memory storage
+            self.memories[memory_id] = updated_note
+            
+            # Record update event
+            self.add_memory_event(
+                "memory_update",
+                memory_id,
+                {
+                    "updated_fields": list(kwargs.keys())
+                }
+            )
+            
             return True
         except Exception as e:
             logger.error(f"Error updating memory: {e}")
             return False
+    
+    def add_memory_event(self, event_type: str, memory_id: str, details: Dict[str, Any]) -> str:
+        """Record a memory system event.
+        
+        Args:
+            event_type: Type of event (e.g., "memory_creation", "query", "evolution")
+            memory_id: ID of the related memory
+            details: Additional event details
+            
+        Returns:
+            str: ID of the created event
+        """
+        event = MemoryEvent(
+            event_type=event_type,
+            details={
+                "memory_id": memory_id,
+                **details
+            }
+        )
+        
+        # Add to in-memory event store
+        self.events.append(event)
+        
+        # Log the event
+        logger.debug(f"Event recorded: {event_type} for memory {memory_id}")
+        
+        return event.id
     
     def delete(self, memory_id: str) -> bool:
         """Delete a memory note by its ID.
@@ -464,6 +538,10 @@ class AgenticMemorySystem:
                 self.retriever.delete_document(memory_id)
                 # Delete from local storage
                 del self.memories[memory_id]
+                
+                # Record deletion event
+                self.add_memory_event("memory_deletion", memory_id, {})
+                
                 return True
             except Exception as e:
                 logger.error(f"Error deleting memory: {e}")
@@ -760,47 +838,93 @@ class AgenticMemorySystem:
                 response_json = json.loads(response)
                 should_evolve = response_json["should_evolve"]
                 
+                # Only process if evolution is needed
                 if should_evolve:
                     actions = response_json["actions"]
+                    updated_note = note  # Start with original note
+                    
                     for action in actions:
                         if action == "strengthen":
+                            # Get suggested connections and tags
                             suggest_connections = response_json["suggested_connections"]
                             new_tags = response_json["tags_to_update"]
-                            note.links.extend(suggest_connections)
-                            note.tags = new_tags
+                            
+                            # Create a new immutable note with updated connections and tags
+                            # Combine existing links with new connections (deduplicate if needed)
+                            combined_links = list(set(updated_note.links + suggest_connections))
+                            
+                            # Create new immutable object with updated fields
+                            updated_note = MemoryNote(**{
+                                **updated_note.model_dump(),
+                                "links": combined_links,
+                                "tags": new_tags
+                            })
+                            
+                            # Log the strengthening event
+                            self.add_memory_event(
+                                "memory_evolution_strengthen",
+                                updated_note.id,
+                                {
+                                    "added_connections": suggest_connections,
+                                    "new_tags": new_tags
+                                }
+                            )
+                            
                         elif action == "update_neighbor":
+                            # Get context and tags for neighbors
                             new_context_neighborhood = response_json["new_context_neighborhood"]
                             new_tags_neighborhood = response_json["new_tags_neighborhood"]
-                            noteslist = list(self.memories.values())
-                            notes_id = list(self.memories.keys())
                             
+                            # Get the list of memories and their IDs
+                            memory_list = list(self.memories.values())
+                            memory_ids = list(self.memories.keys())
+                            
+                            # Update each neighbor with new context and tags
                             for i in range(min(len(indices), len(new_tags_neighborhood))):
-                                # Skip if we don't have enough neighbors
+                                # Skip if index is out of range
                                 if i >= len(indices):
                                     continue
-                                    
-                                tag = new_tags_neighborhood[i]
+                                
+                                # Get new tags and context for this neighbor
+                                new_tags = new_tags_neighborhood[i]
                                 if i < len(new_context_neighborhood):
-                                    context = new_context_neighborhood[i]
+                                    new_context = new_context_neighborhood[i]
                                 else:
-                                    # Since indices are just numbers now, we need to find the memory
-                                    # In memory list using its index number
-                                    if i < len(noteslist):
-                                        context = noteslist[i].context
+                                    # Keep existing context if no new one provided
+                                    if i < len(memory_list):
+                                        new_context = memory_list[i].context
                                     else:
                                         continue
-                                        
-                                # Get index from the indices list
+                                
+                                # Get the memory from indices
                                 if i < len(indices):
-                                    memorytmp_idx = indices[i]
-                                    # Make sure the index is valid
-                                    if memorytmp_idx < len(noteslist):
-                                        notetmp = noteslist[memorytmp_idx]
-                                        notetmp.tags = tag
-                                        notetmp.context = context
-                                        # Make sure the index is valid
-                                        if memorytmp_idx < len(notes_id):
-                                            self.memories[notes_id[memorytmp_idx]] = notetmp
+                                    memory_idx = indices[i]
+                                    # Check if index is valid
+                                    if memory_idx < len(memory_list):
+                                        old_memory = memory_list[memory_idx]
+                                        
+                                        # Create updated memory with immutable model
+                                        updated_memory = MemoryNote(**{
+                                            **old_memory.model_dump(),
+                                            "tags": new_tags,
+                                            "context": new_context
+                                        })
+                                        
+                                        # Check if the ID is valid
+                                        if memory_idx < len(memory_ids):
+                                            memory_id = memory_ids[memory_idx]
+                                            # Update in-memory store
+                                            self.memories[memory_id] = updated_memory
+                                            
+                                            # Record the update
+                                            self.add_memory_event(
+                                                "memory_evolution_update_neighbor",
+                                                memory_id,
+                                                {
+                                                    "new_tags": new_tags,
+                                                    "new_context": new_context
+                                                }
+                                            )
                                 
                 return should_evolve, note
                 
