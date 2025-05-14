@@ -5,7 +5,7 @@ from datetime import datetime
 from amem.config import load_config
 from amem.llm_controller import LLMController
 from amem.retrievers import FalkorDBRetriever
-from amem.embedding.providers import EmbeddingProvider, LiteLLMEmbedding
+from amem.embedding.providers import EmbeddingProvider
 from amem.factory import EmbeddingProviderFactory, RetrieverFactory, LLMControllerFactory
 import json
 import logging
@@ -97,12 +97,7 @@ class AgenticMemorySystem:
                  embedding_provider: Optional[EmbeddingProvider] = None,
                  retriever: Optional[FalkorDBRetriever] = None,
                  llm_controller: Optional[LLMController] = None,
-                 model_name: Optional[str] = None,  # For backward compatibility
-                 llm_backend: Optional[str] = None,  # For backward compatibility
-                 llm_model: Optional[str] = None,  # For backward compatibility
-                 evo_threshold: int = 100,
-                 api_key: Optional[str] = None,  # For backward compatibility
-                 base_url: Optional[str] = None):  # For backward compatibility
+                 evo_threshold: int = 100):
         """Initialize the memory system.
         
         Args:
