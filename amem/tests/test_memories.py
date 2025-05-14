@@ -15,30 +15,56 @@ class TestAgenticMemoryWithCloudServices(unittest.TestCase):
     This test suite makes actual calls to:
     - LiteLLM for embeddings (AWS Bedrock with Cohere)
     - OpenRouter for LLM (Meta LLaMA)
-    - Qdrant for vector storage
+    - Database storage (FalkorDB or Qdrant)
     
     Note: These tests require:
     1. Environment variables or .env file to be properly set up
-    2. Docker to be running with Qdrant container started
+    2. Docker to be running with the database container started
     3. Internet connectivity for cloud service calls
     """
     
     @classmethod
     def setUpClass(cls):
         """Set up resources before any tests run"""
-        # Check if Docker/Qdrant is running
-        import requests
-        try:
-            # Use port from environment variable or default to 7333
-            from os import environ
-            port = int(environ.get("QDRANT_PORT", "7333"))
-            host = environ.get("QDRANT_HOST", "localhost")
-            response = requests.get(f"http://{host}:{port}/healthz")
-            if response.status_code != 200:
-                logger.warning("Qdrant might not be running properly. Tests may fail.")
-        except Exception as e:
-            logger.warning(f"Could not connect to Qdrant: {e}")
-            logger.warning("Make sure to start Qdrant using 'docker-compose up -d'")
+        # Determine which database to check
+        from os import environ
+        db_type = environ.get("VECTOR_DB_TYPE", "falkordb").lower()
+        
+        if db_type == "falkordb":
+            # Check if Docker/FalkorDB is running
+            try:
+                import redis
+                port = int(environ.get("FALKORDB_PORT", ""))
+                host = environ.get("FALKORDB_HOST", "localhost")
+                client = redis.Redis(host=host, port=port, decode_responses=True)
+                
+                if not client.ping():
+                    logger.warning("FalkorDB is not responding to ping. Tests may fail.")
+                else:
+                    # Try a FalkorDB-specific command
+                    try:
+                        client.execute_command("GRAPH.LIST")
+                        logger.info("FalkorDB is running properly.")
+                    except Exception:
+                        logger.warning("Redis is running but doesn't support FalkorDB commands. Tests may fail.")
+            except Exception as e:
+                logger.warning(f"Could not connect to FalkorDB: {e}")
+                logger.warning("Make sure to start FalkorDB using 'docker-compose up -d'")
+        elif db_type == "qdrant":
+            # Check if Docker/Qdrant is running
+            import requests
+            try:
+                # Use port from environment variable or default to 7333
+                port = int(environ.get("QDRANT_PORT", "7333"))
+                host = environ.get("QDRANT_HOST", "localhost")
+                response = requests.get(f"http://{host}:{port}/healthz")
+                if response.status_code != 200:
+                    logger.warning("Qdrant might not be running properly. Tests may fail.")
+            except Exception as e:
+                logger.warning(f"Could not connect to Qdrant: {e}")
+                logger.warning("Make sure to start Qdrant using 'docker-compose up -d'")
+        else:
+            logger.warning(f"Unknown database type: {db_type}")
     
     def setUp(self):
         """Create a fresh memory system before each test"""
@@ -126,7 +152,7 @@ class TestAgenticMemoryWithCloudServices(unittest.TestCase):
             self.memory_system.delete(memory_id)
     
     def test_vector_db_storage(self):
-        """Test that Qdrant is storing and retrieving vectors properly"""
+        """Test that the database is storing and retrieving vectors properly"""
         # Add a sample memory
         content = "This is a test memory for vector database functionality."
         memory_id = self.memory_system.add_note(content)

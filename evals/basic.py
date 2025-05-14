@@ -20,22 +20,58 @@ from amem.memory_system import AgenticMemorySystem
 from dotenv import load_dotenv
 from os import environ
 
-def check_qdrant_running():
-    """Check if Qdrant is running via simple HTTP request"""
-    try:
-        import requests
-        port = int(environ.get("QDRANT_PORT", "7333"))
-        host = environ.get("QDRANT_HOST", "localhost")
-        response = requests.get(f"http://{host}:{port}/healthz")
-        if response.status_code == 200:
-            print("✅ Qdrant is running")
-            return True
-        else:
-            print(f"❌ Qdrant is responding but may have issues (status code: {response.status_code})")
+def check_database_running():
+    """Check if the configured database is running"""
+    # Check which database type is configured
+    load_dotenv()  # Load environment variables first
+    db_type = environ.get("VECTOR_DB_TYPE", "falkordb")
+    
+    # Check if FalkorDB is running
+    if db_type == "falkordb":
+        try:
+            import redis
+            port = int(environ.get("FALKORDB_PORT", ""))
+            host = environ.get("FALKORDB_HOST", "localhost")
+            client = redis.Redis(host=host, port=port, decode_responses=True)
+            
+            # Try a simple Redis PING command to check if server is running
+            response = client.ping()
+            if response:
+                # Now try a FalkorDB specific command to verify it's actually FalkorDB
+                try:
+                    client.execute_command("GRAPH.LIST")
+                    print("✅ FalkorDB is running")
+                    return True
+                except Exception:
+                    print("❌ Redis is running, but it's not running FalkorDB")
+                    print("   Please ensure the FalkorDB Docker container is running")
+                    return False
+            else:
+                print("❌ FalkorDB ping failed")
+                return False
+        except Exception as e:
+            print(f"❌ FalkorDB is not running or not reachable: {e}")
+            print("   Please start FalkorDB using 'docker-compose up -d'")
             return False
-    except Exception as e:
-        print(f"❌ Qdrant is not running or not reachable: {e}")
-        print("   Please start Qdrant using 'docker-compose up -d'")
+    # Check if Qdrant is running
+    elif db_type == "qdrant":
+        try:
+            import requests
+            port = int(environ.get("QDRANT_PORT", "7333"))
+            host = environ.get("QDRANT_HOST", "localhost")
+            response = requests.get(f"http://{host}:{port}/healthz")
+            if response.status_code == 200:
+                print("✅ Qdrant is running")
+                return True
+            else:
+                print(f"❌ Qdrant is responding but may have issues (status code: {response.status_code})")
+                return False
+        except Exception as e:
+            print(f"❌ Qdrant is not running or not reachable: {e}")
+            print("   Please start Qdrant using 'docker-compose up -d'")
+            return False
+    else:
+        print(f"⚠️ Unknown database type: {db_type}")
         return False
 
 def main():
@@ -43,27 +79,39 @@ def main():
     # Load environment variables
     load_dotenv()
     
-    # Check if Qdrant is running
-    if not check_qdrant_running():
-        print("Please start Qdrant first using 'docker-compose up -d'")
+    # Check if database is running
+    if not check_database_running():
+        print("Please start the database first using 'docker-compose up -d'")
         sys.exit(1)
     
     print("\n🚀 Initializing A-MEM system...")
     try:
-        # Initialize the memory system with a specific test collection
-        memory_system = AgenticMemorySystem(
-            config={
-                "vector_db": {
-                    "type": "qdrant",
-                    "qdrant": {
-                        "collection": "example_memories",  # Use specific collection for example script
-                        "host": environ.get("QDRANT_HOST", "localhost"),
-                        "port": int(environ.get("QDRANT_PORT", "7333"))
-                    }
-                }
-                # Other config settings will be loaded from .env
+        # Get database type from environment or use falkordb as default
+        db_type = environ.get("VECTOR_DB_TYPE", "falkordb")
+        
+        # Configure the appropriate database
+        config = {
+            "vector_db": {
+                "type": db_type,
             }
-        )
+        }
+        
+        # Add database-specific configuration
+        if db_type == "falkordb":
+            config["vector_db"]["falkordb"] = {
+                "collection": "example_memories",  # Use specific collection for example script
+                "host": environ.get("FALKORDB_HOST", "localhost"),
+                "port": int(environ.get("FALKORDB_PORT", ""))
+            }
+        else:  # Fallback to Qdrant
+            config["vector_db"]["qdrant"] = {
+                "collection": "example_memories",  # Use specific collection for example script
+                "host": environ.get("QDRANT_HOST", "localhost"),
+                "port": int(environ.get("QDRANT_PORT", "7333"))
+            }
+        
+        # Initialize the memory system with the configuration
+        memory_system = AgenticMemorySystem(config=config)
         print("✅ Memory system initialized successfully")
     except Exception as e:
         print(f"❌ Failed to initialize memory system: {e}")
@@ -151,9 +199,42 @@ def main():
     print("\n✨ Example completed successfully! ✨")
 
 def cleanup_example_data():
-    """Clean up the example collection from Qdrant"""
+    """Clean up the example collection from databases"""
+    # Check which database was used
     try:
-        print("\n🧹 Cleaning up example data...")
+        from os import environ
+        db_type = environ.get("VECTOR_DB_TYPE", "falkordb")
+    except:
+        db_type = "falkordb"  # Default to FalkorDB
+    
+    success = False
+    
+    # Clean up FalkorDB if that was used
+    if db_type == "falkordb":
+        try:
+            print("\n🧹 Cleaning up example data from FalkorDB...")
+            import redis
+            port = int(environ.get("FALKORDB_PORT", ""))
+            host = environ.get("FALKORDB_HOST", "localhost")
+            client = redis.Redis(host=host, port=port, decode_responses=True)
+            
+            try:
+                graph_list = client.execute_command("GRAPH.LIST")
+                if "example_memories" in graph_list:
+                    client.execute_command("GRAPH.DELETE example_memories")
+                    print("✅ Example FalkorDB graph deleted successfully")
+                    success = True
+                else:
+                    print("ℹ️ No example FalkorDB graph found to delete")
+            except Exception as inner_e:
+                print(f"ℹ️ Error checking FalkorDB graphs: {inner_e}")
+                
+        except Exception as e:
+            print(f"❌ Error cleaning up FalkorDB data: {e}")
+    
+    # Also try to clean up Qdrant as a fallback
+    try:
+        print("\n🧹 Checking for Qdrant example data...")
         from qdrant_client import QdrantClient
         port = int(environ.get("QDRANT_PORT", "7333"))
         host = environ.get("QDRANT_HOST", "localhost")
@@ -162,12 +243,16 @@ def cleanup_example_data():
         collections = [c.name for c in client.get_collections().collections]
         if "example_memories" in collections:
             client.delete_collection("example_memories")
-            print("✅ Example collection deleted successfully")
+            print("✅ Example Qdrant collection deleted successfully")
+            success = True
         else:
-            print("ℹ️ No example collection found to delete")
+            print("ℹ️ No example Qdrant collection found to delete")
             
     except Exception as e:
-        print(f"❌ Error cleaning up example data: {e}")
+        print(f"ℹ️ Error checking Qdrant data: {e}")
+    
+    if not success:
+        print("⚠️ Could not clean up example data from any database")
 
 if __name__ == "__main__":
     # Parse command-line arguments

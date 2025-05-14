@@ -2,7 +2,7 @@
 
 from .memory_system import AgenticMemorySystem
 from .llm_controller import LLMController
-from .retrievers import QdrantRetriever
+from .retrievers import QdrantRetriever, FalkorDBRetriever
 from .embedding.providers import EmbeddingProvider, LiteLLMEmbedding
 from .factory import EmbeddingProviderFactory, RetrieverFactory, LLMControllerFactory
 
@@ -12,6 +12,7 @@ __all__ = [
     'AgenticMemorySystem',
     'LLMController',
     'QdrantRetriever',
+    'FalkorDBRetriever',
     'EmbeddingProvider',
     'LiteLLMEmbedding',
     'EmbeddingProviderFactory',

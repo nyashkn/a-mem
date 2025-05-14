@@ -4,9 +4,10 @@ A-MEM Verification Script
 
 This script performs basic tests to verify that all components of A-MEM are working correctly.
 It tests:
-1. Qdrant connection
-2. AWS Bedrock embedding functionality
-3. OpenRouter LLM integration
+1. FalkorDB connection and functionality
+2. FalkorDBRetriever class
+3. AWS Bedrock embedding functionality
+4. OpenRouter LLM integration
 
 Usage:
   python verify_setup.py
@@ -16,6 +17,9 @@ import os
 import sys
 import json
 import time
+import uuid
+from typing import List, Dict, Any
+import numpy as np
 from dotenv import load_dotenv
 from amem.memory_system import AgenticMemorySystem
 from amem.embedding.providers import LiteLLMEmbedding
@@ -25,23 +29,189 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("verify")
 
-def check_qdrant():
-    """Check if Qdrant is running and accessible"""
-    logger.info("🔍 Checking Qdrant connection...")
+def check_falkordb_connection():
+    """Test connection to FalkorDB using the FalkorDB Python library"""
+    logger.info("🔍 Checking FalkorDB connection...")
     try:
-        import requests
-        # Use port from environment variable or default to 7333
-        qdrant_port = int(os.getenv("QDRANT_PORT", "7333"))
-        response = requests.get(f"http://localhost:{qdrant_port}/healthz")
-        if response.status_code == 200:
-            logger.info("✅ Qdrant is running properly")
+        from falkordb import FalkorDB
+        
+        # Connect to FalkorDB
+        host = os.getenv("FALKORDB_HOST", "localhost")
+        port = int(os.getenv("FALKORDB_PORT", "7379"))
+        client = FalkorDB(host=host, port=port)
+        
+        logger.info("✅ Connected to FalkorDB")
+        
+        # List available graphs
+        graphs = client.list_graphs()
+        logger.info(f"Available graphs: {graphs}")
+        
+        # Try to create a simple test graph
+        try:
+            # Select a test graph
+            test_graph = "verify_test_graph"
+            graph = client.select_graph(test_graph)
+            
+            # Delete the graph if it exists (in case of previous test failure)
+            try:
+                if test_graph in graphs:
+                    graph.delete()
+                    logger.info(f"Cleaned up existing test graph: {test_graph}")
+                    # Re-select the graph after deletion
+                    graph = client.select_graph(test_graph)
+            except Exception as clean_e:
+                logger.warning(f"Error during cleanup: {clean_e}")
+            
+            # Create a simple node without properties
+            result = graph.query("CREATE (:Person)")
+            logger.info(f"✅ Created test node, stats: {result.nodes_created} node(s) created")
+            
+            # Query the graph
+            result = graph.query("MATCH (p:Person) RETURN p")
+            logger.info(f"✅ Query returned {len(result.result_set)} results")
+            
+            # Add properties to nodes
+            result = graph.query("MATCH (p:Person) SET p.name = 'Alice', p.age = 30 RETURN p")
+            logger.info(f"✅ Added properties to nodes: {result.properties_set} properties set")
+            
+            # Query with properties
+            result = graph.query("MATCH (p:Person) WHERE p.name = 'Alice' RETURN p.name, p.age")
+            if result.result_set and len(result.result_set) > 0:
+                logger.info(f"✅ Query with properties returned: {result.result_set}")
+            
+            # Test vector operations if supported
+            try:
+                # Create vector index
+                graph.create_node_vector_index("Person", "embedding", dim=4, similarity_function="cosine")
+                logger.info("✅ Created vector index")
+                
+                # Create a node with vector
+                vector = [0.1, 0.2, 0.3, 0.4]  # Simple 4D vector
+                result = graph.query(
+                    "CREATE (:Person {name: 'Bob', embedding: $embedding})",
+                    params={"embedding": vector}
+                )
+                logger.info(f"✅ Created node with vector embedding")
+                
+                # Vector search (may not work on all FalkorDB versions)
+                try:
+                    result = graph.query(
+                        """
+                        MATCH (p:Person)
+                        WHERE p.embedding IS NOT NULL
+                        WITH p, vector.similarity.cosine(p.embedding, $query_vector) AS score
+                        RETURN p.name, score
+                        ORDER BY score DESC
+                        """,
+                        params={"query_vector": [0.1, 0.2, 0.3, 0.4]}
+                    )
+                    logger.info(f"✅ Vector similarity search successful: {result.result_set}")
+                except Exception as vector_e:
+                    logger.warning(f"Vector similarity search not supported: {vector_e}")
+            except Exception as vector_index_e:
+                logger.warning(f"Vector index creation not supported: {vector_index_e}")
+            
+            # Delete the test graph
+            graph.delete()
+            logger.info("✅ Deleted test graph")
+            
+            logger.info("✅ FalkorDB is running properly with full graph capabilities")
             return True
-        else:
-            logger.error(f"❌ Qdrant is responding with unexpected status code: {response.status_code}")
+        except Exception as graph_e:
+            logger.error(f"❌ Error executing graph commands: {graph_e}")
+            logger.error("   Graph commands failed")
             return False
+    except ImportError:
+        logger.error("❌ FalkorDB library not installed. Install with: pip install falkordb")
+        return False
     except Exception as e:
-        logger.error(f"❌ Could not connect to Qdrant: {e}")
-        logger.info("   Make sure to start Qdrant using 'docker-compose up -d'")
+        logger.error(f"❌ Could not connect to FalkorDB: {e}")
+        logger.error("   Make sure to start FalkorDB using 'docker-compose up -d'")
+        return False
+
+def test_falkordb_retriever():
+    """Test the FalkorDBRetriever class"""
+    logger.info("🔍 Testing FalkorDBRetriever functionality...")
+    try:
+        from amem.retrievers import FalkorDBRetriever
+        
+        # Create a simple mock embedding provider for testing
+        class MockEmbeddingProvider:
+            def get_embedding(self, text: str) -> List[float]:
+                # Return a simple deterministic vector based on text length
+                # This is just for testing purposes
+                return [0.1, 0.2, 0.3, 0.4] * 256  # 1024-dimensional vector
+        
+        # Create retriever with test collection
+        retriever = FalkorDBRetriever(
+            collection_name="test_retriever",
+            host=os.getenv("FALKORDB_HOST", "localhost"),
+            port=int(os.getenv("FALKORDB_PORT", "7379")),
+            embedding_provider=MockEmbeddingProvider(),
+            vector_size=1024
+        )
+        logger.info("✅ Created FalkorDBRetriever instance")
+        
+        # Add a test document
+        doc_id = str(uuid.uuid4())
+        metadata = {
+            "keywords": ["test", "example", "memory"],
+            "context": "Testing",
+            "timestamp": "202505141234"
+        }
+        content = "This is a test memory for the FalkorDBRetriever"
+        
+        # Store JSON strings instead of raw arrays/objects to prevent serialization issues
+        metadata["keywords"] = json.dumps(metadata["keywords"])
+        
+        result = retriever.add_document(content, metadata, doc_id)
+        if result:
+            logger.info(f"✅ Added test document with ID: {doc_id}")
+        else:
+            logger.error("❌ Failed to add test document")
+            return False
+        
+        # Search for the document
+        search_results = retriever.search("test memory", k=5)
+        
+        if (search_results and 'ids' in search_results and 
+            search_results['ids'] and len(search_results['ids']) > 0 and 
+            len(search_results['ids'][0]) > 0):
+            logger.info(f"✅ Search returned {len(search_results['ids'][0])} results")
+            logger.info(f"   First result ID: {search_results['ids'][0][0]}")
+            logger.info(f"   First result similarity: {search_results['distances'][0][0]}")
+        else:
+            logger.error("❌ Search returned no results")
+            return False
+        
+        # Delete the document
+        delete_result = retriever.delete_document(doc_id)
+        if delete_result:
+            logger.info("✅ Successfully deleted test document")
+        else:
+            logger.error("❌ Failed to delete test document")
+            return False
+        
+        # Clean up by deleting the test graph
+        try:
+            from falkordb import FalkorDB
+            client = FalkorDB(host=os.getenv("FALKORDB_HOST", "localhost"), 
+                              port=int(os.getenv("FALKORDB_PORT", "7379")))
+            graphs = client.list_graphs()
+            if "test_retriever" in graphs:
+                graph = client.select_graph("test_retriever")
+                graph.delete()
+                logger.info("✅ Cleaned up test graph")
+        except Exception as e:
+            logger.warning(f"Warning during cleanup: {e}")
+        
+        logger.info("✅ FalkorDBRetriever tests passed")
+        return True
+    except ImportError:
+        logger.error("❌ Required libraries not installed")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Error testing FalkorDBRetriever: {e}")
         return False
 
 def check_embeddings():
@@ -115,17 +285,17 @@ def check_embeddings():
             
         logger.info("✅ Batch embedding also working correctly")
         
-        # Clean up test collection
+        # Clean up any test graphs from FalkorDB if needed
         try:
-            from qdrant_client import QdrantClient
-            # Use port from environment variable or default to 7333
-            qdrant_host = os.getenv("QDRANT_HOST", "localhost")
-            qdrant_port = int(os.getenv("QDRANT_PORT", "7333"))
-            client = QdrantClient(host=qdrant_host, port=qdrant_port)
-            if "verification_test" in [c.name for c in client.get_collections().collections]:
-                client.delete_collection("verification_test")
+            from falkordb import FalkorDB
+            client = FalkorDB(host=os.getenv("FALKORDB_HOST", "localhost"), 
+                              port=int(os.getenv("FALKORDB_PORT", "7379")))
+            graphs = client.list_graphs()
+            if "verification_test" in graphs:
+                graph = client.select_graph("verification_test")
+                graph.delete()
         except Exception as e:
-            logger.warning(f"Note: Could not clean up test collection: {e}")
+            logger.warning(f"Note: Could not clean up test graph: {e}")
             
         return True
     except Exception as e:
@@ -164,26 +334,28 @@ def main():
     logger.info("🚀 Starting A-MEM verification")
     logger.info("-------------------------------")
     
-    # Load environment variables
-    load_dotenv()
+    # Load environment variables from parent directory
+    load_dotenv(dotenv_path="../.env")
     
     # Check all components
-    qdrant_ok = check_qdrant()
+    db_ok = check_falkordb_connection()
     
-    if not qdrant_ok:
-        logger.error("❌ Qdrant verification failed. Cannot proceed with further tests.")
+    if not db_ok:
+        logger.error(f"❌ FalkorDB verification failed. Cannot proceed with further tests.")
         return False
     
+    retriever_ok = test_falkordb_retriever()
     embedding_ok = check_embeddings()
     llm_ok = check_llm()
     
     # Report results
     logger.info("\n📋 Verification Results:")
-    logger.info(f"Qdrant:    {'✅' if qdrant_ok else '❌'}")
-    logger.info(f"Embedding: {'✅' if embedding_ok else '❌'}")
-    logger.info(f"LLM:       {'✅' if llm_ok else '❌'}")
+    logger.info(f"FalkorDB:          {'✅' if db_ok else '❌'}")
+    logger.info(f"FalkorDBRetriever: {'✅' if retriever_ok else '❌'}")
+    logger.info(f"Embedding:         {'✅' if embedding_ok else '❌'}")
+    logger.info(f"LLM:               {'✅' if llm_ok else '❌'}")
     
-    if all([qdrant_ok, embedding_ok, llm_ok]):
+    if all([db_ok, retriever_ok, embedding_ok, llm_ok]):
         logger.info("\n✨ All components verified successfully! ✨")
         logger.info("The A-MEM system is ready to use.")
         return True

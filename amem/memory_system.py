@@ -1,10 +1,10 @@
 import keyword
-from typing import List, Dict, Optional, Any, Tuple, Union
+from typing import List, Dict, Optional, Any, Tuple
 import uuid
 from datetime import datetime
 from amem.config import load_config
 from amem.llm_controller import LLMController
-from amem.retrievers import QdrantRetriever
+from amem.retrievers import FalkorDBRetriever
 from amem.embedding.providers import EmbeddingProvider, LiteLLMEmbedding
 from amem.factory import EmbeddingProviderFactory, RetrieverFactory, LLMControllerFactory
 import json
@@ -95,7 +95,7 @@ class AgenticMemorySystem:
     def __init__(self, 
                  config: Optional[Dict[str, Any]] = None,
                  embedding_provider: Optional[EmbeddingProvider] = None,
-                 retriever: Optional[QdrantRetriever] = None,
+                 retriever: Optional[FalkorDBRetriever] = None,
                  llm_controller: Optional[LLMController] = None,
                  model_name: Optional[str] = None,  # For backward compatibility
                  llm_backend: Optional[str] = None,  # For backward compatibility
@@ -126,23 +126,6 @@ class AgenticMemorySystem:
             config = load_config()
         self.config = config
         
-        # Handle backward compatibility
-        if model_name is not None:
-            self.config["embedding"] = self.config.get("embedding", {})
-            self.config["embedding"]["model"] = model_name
-        if llm_backend is not None:
-            self.config["llm"] = self.config.get("llm", {})
-            self.config["llm"]["backend"] = llm_backend
-        if llm_model is not None:
-            self.config["llm"] = self.config.get("llm", {})
-            self.config["llm"]["model"] = llm_model
-        if api_key is not None:
-            self.config["llm"] = self.config.get("llm", {})
-            self.config["llm"]["api_key"] = api_key
-        if base_url is not None:
-            self.config["llm"] = self.config.get("llm", {})
-            self.config["llm"]["base_url"] = base_url
-        
         # Use provided embedding provider or create from factory
         try:
             self.embedding_provider = embedding_provider or EmbeddingProviderFactory.create(self.config)
@@ -161,8 +144,8 @@ class AgenticMemorySystem:
                 )
             except Exception as e:
                 logger.error(f"Error initializing retriever: {e}")
-                # Raise error if Qdrant initialization fails
-                logger.error("Failed to initialize Qdrant retriever")
+                # Raise error if retriever initialization fails
+                logger.error("Failed to initialize FalkorDB retriever")
                 raise e
             
         # For LLM controller
@@ -320,22 +303,18 @@ class AgenticMemorySystem:
         try:
             # Get current retriever configuration
             current_retriever_type = type(self.retriever)
-            current_collection = None
-            current_host = None
-            current_port = None
-            
-            # Get configuration from current Qdrant retriever
             current_collection = self.retriever.collection_name
             current_host = self.retriever.client.host
             current_port = self.retriever.client.port
             
-            # Create a new Qdrant retriever
-            self.retriever = QdrantRetriever(
+            # Create a new FalkorDB retriever
+            self.retriever = FalkorDBRetriever(
                 collection_name=current_collection,
                 host=current_host,
                 port=current_port,
                 embedding_provider=self.embedding_provider
             )
+            logger.info(f"Created new FalkorDB retriever for consolidation")
             
             # Re-add all memory documents with their complete metadata
             for memory in self.memories.values():
@@ -521,7 +500,7 @@ class AgenticMemorySystem:
         """Search for memories using vector retrieval.
         
         This method uses:
-        1. Qdrant vector store for semantic similarity
+        1. FalkorDB for semantic similarity search
         
         The results are deduplicated and ranked by relevance.
         
@@ -563,7 +542,7 @@ class AgenticMemorySystem:
         """Search for memories using vector retrieval.
         
         This method uses:
-        1. Qdrant vector store for semantic similarity
+        1. FalkorDB for semantic similarity search
         
         The results are deduplicated and ranked by relevance.
         

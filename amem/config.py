@@ -10,7 +10,12 @@ def load_config() -> Dict[str, Any]:
     config = {
         # Vector DB configuration
         "vector_db": {
-            "type": os.getenv("VECTOR_DB_TYPE", "qdrant"),
+            "type": os.getenv("VECTOR_DB_TYPE", "falkordb"),  # Default to FalkorDB
+            "falkordb": {
+                "host": os.getenv("FALKORDB_HOST", "localhost"),
+                "port": int(os.getenv("FALKORDB_PORT", "")),
+                "collection": os.getenv("FALKORDB_COLLECTION", "memories")
+            },
             "qdrant": {
                 "host": os.getenv("QDRANT_HOST", "localhost"),
                 "port": int(os.getenv("QDRANT_PORT", "7333")),

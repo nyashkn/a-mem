@@ -1,12 +1,18 @@
 services:
-  qdrant:
-    image: qdrant/qdrant
+  falkordb:
+    image: falkordb/falkordb:edge  # Using edge tag as suggested in documentation
     ports:
-      - "7333:6333"
+      - "7379:6379"  # Map Redis port to 7379 to avoid conflicts
+      - "3000:3000"  # Web interface port
     volumes:
-      - qdrant_data:/qdrant/storage
-    restart: always  # Ensures restart on system reboot
+      - falkordb_data:/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  qdrant_data:
+  falkordb_data:
     driver: local

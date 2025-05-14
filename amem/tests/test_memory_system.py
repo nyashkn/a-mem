@@ -7,57 +7,112 @@ class TestAgenticMemorySystem(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up resources before any tests run."""
-        # Check if Qdrant is running
-        import requests
-        try:
-            # Use port from environment variable or default to 7333
-            from os import environ
-            port = int(environ.get("QDRANT_PORT", "7333"))
-            host = environ.get("QDRANT_HOST", "localhost")
-            response = requests.get(f"http://{host}:{port}/healthz")
-            if response.status_code != 200:
-                print("⚠️ Warning: Qdrant might not be running properly. Tests may fail.")
-        except Exception as e:
-            print(f"⚠️ Warning: Could not connect to Qdrant: {e}")
-            print("Make sure to start Qdrant using 'docker-compose up -d'")
+        from os import environ
+        db_type = environ.get("VECTOR_DB_TYPE", "falkordb").lower()
+        
+        if db_type == "falkordb":
+            # Check if FalkorDB is running
+            try:
+                import redis
+                port = int(environ.get("FALKORDB_PORT", ""))
+                host = environ.get("FALKORDB_HOST", "localhost")
+                client = redis.Redis(host=host, port=port, decode_responses=True)
+                
+                if not client.ping():
+                    print("⚠️ Warning: FalkorDB is not responding to ping. Tests may fail.")
+                else:
+                    # Try a FalkorDB-specific command
+                    try:
+                        client.execute_command("GRAPH.LIST")
+                        print("✅ FalkorDB is running properly.")
+                    except Exception:
+                        print("⚠️ Warning: Redis is running but doesn't support FalkorDB commands. Tests may fail.")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not connect to FalkorDB: {e}")
+                print("Make sure to start FalkorDB using 'docker-compose up -d'")
+        elif db_type == "qdrant":
+            # Check if Qdrant is running
+            import requests
+            try:
+                port = int(environ.get("QDRANT_PORT", "7333"))
+                host = environ.get("QDRANT_HOST", "localhost")
+                response = requests.get(f"http://{host}:{port}/healthz")
+                if response.status_code != 200:
+                    print("⚠️ Warning: Qdrant might not be running properly. Tests may fail.")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not connect to Qdrant: {e}")
+                print("Make sure to start Qdrant using 'docker-compose up -d'")
             
     def setUp(self):
         """Set up test environment before each test."""
+        # Get database type from environment
+        from os import environ
+        self.db_type = environ.get("VECTOR_DB_TYPE", "falkordb").lower()
+        
         # Use test-specific collection to avoid conflicts with production data
         self.test_collection = "test_memories_unit_tests"
         
-        self.memory_system = AgenticMemorySystem(
-            config={
-                "embedding": {
-                    "provider": "litellm",
-                    "model": "bedrock/cohere.embed-multilingual-v3"
-                },
-                "llm": {
-                    "backend": "openai",
-                    "model": "meta-llama/llama-4-maverick",
-                    "base_url": "https://openrouter.ai/api/v1"
-                },
-                "vector_db": {
-                    "type": "qdrant",
-                    "qdrant": {
-                        "collection": self.test_collection,  # Use test collection
-                        "host": "localhost",
-                        "port": 7333
-                    }
-                }
+        # Create configuration based on database type
+        config = {
+            "embedding": {
+                "provider": "litellm",
+                "model": "bedrock/cohere.embed-multilingual-v3"
+            },
+            "llm": {
+                "backend": "openai",
+                "model": "meta-llama/llama-4-maverick",
+                "base_url": "https://openrouter.ai/api/v1"
+            },
+            "vector_db": {
+                "type": self.db_type,
             }
-        )
+        }
+        
+        # Add database-specific configuration
+        if self.db_type == "falkordb":
+            config["vector_db"]["falkordb"] = {
+                "collection": self.test_collection,
+                "host": "localhost",
+                "port": 
+            }
+        else:  # Default to Qdrant
+            config["vector_db"]["qdrant"] = {
+                "collection": self.test_collection,
+                "host": "localhost",
+                "port": 7333
+            }
+        
+        # Initialize memory system with configuration
+        self.memory_system = AgenticMemorySystem(config=config)
         
     def tearDown(self):
         """Clean up after each test."""
         # Clean up test collection to avoid data persistence
-        try:
-            from qdrant_client import QdrantClient
-            client = QdrantClient(host="localhost", port=7333)
-            if self.test_collection in [c.name for c in client.get_collections().collections]:
-                client.delete_collection(self.test_collection)
-        except Exception as e:
-            print(f"Could not clean up Qdrant test collection: {e}")
+        if self.db_type == "falkordb":
+            try:
+                import redis
+                client = redis.Redis(host="localhost", port=, decode_responses=True)
+                
+                # Check if the graph exists before trying to delete
+                try:
+                    graph_list = client.execute_command("GRAPH.LIST")
+                    if self.test_collection in graph_list:
+                        client.execute_command(f"GRAPH.DELETE {self.test_collection}")
+                        print(f"Deleted FalkorDB graph: {self.test_collection}")
+                except Exception as e:
+                    print(f"Could not list FalkorDB graphs: {e}")
+                    
+            except Exception as e:
+                print(f"Could not clean up FalkorDB graph: {e}")
+        else:  # Assume Qdrant
+            try:
+                from qdrant_client import QdrantClient
+                client = QdrantClient(host="localhost", port=7333)
+                if self.test_collection in [c.name for c in client.get_collections().collections]:
+                    client.delete_collection(self.test_collection)
+                    print(f"Deleted Qdrant collection: {self.test_collection}")
+            except Exception as e:
+                print(f"Could not clean up Qdrant test collection: {e}")
         
     def test_create_memory(self):
         """Test creating a new memory with complete metadata."""
@@ -92,7 +147,7 @@ class TestAgenticMemorySystem(unittest.TestCase):
         self.assertEqual(memory.timestamp, timestamp)
         
     def test_memory_metadata_persistence(self):
-        """Test that memory metadata persists through ChromaDB storage and retrieval."""
+        """Test that memory metadata persists through database storage and retrieval."""
         # Create a memory with complex metadata
         content = "Complex test memory"
         tags = ["test", "complex", "metadata"]
@@ -114,7 +169,7 @@ class TestAgenticMemorySystem(unittest.TestCase):
             evolution_history=evolution_history
         )
         
-        # Search for the memory using ChromaDB
+        # Search for the memory using database storage
         results = self.memory_system.search_agentic(content, k=1)
         self.assertGreater(len(results), 0)
         
@@ -127,7 +182,7 @@ class TestAgenticMemorySystem(unittest.TestCase):
         self.assertEqual(result['category'], category)
         
     def test_memory_update(self):
-        """Test updating memory metadata through ChromaDB."""
+        """Test updating memory metadata through database storage."""
         # Create initial memory
         content = "Initial content"
         memory_id = self.memory_system.add_note(content=content)
@@ -148,7 +203,7 @@ class TestAgenticMemorySystem(unittest.TestCase):
         
         self.assertTrue(success)
         
-        # Verify updates in ChromaDB
+        # Verify updates in the database
         results = self.memory_system.search_agentic(new_content, k=1)
         self.assertGreater(len(results), 0)
         result = results[0]
@@ -192,7 +247,7 @@ class TestAgenticMemorySystem(unittest.TestCase):
         self.assertIn(id2, memory1_updated.links)
         
     def test_memory_evolution(self):
-        """Test memory evolution system with ChromaDB."""
+        """Test memory evolution system with database storage."""
         # Create related memories
         contents = [
             "Deep learning neural networks",
@@ -223,7 +278,7 @@ class TestAgenticMemorySystem(unittest.TestCase):
             self.assertIsNotNone(result['keywords'])
             
     def test_memory_deletion(self):
-        """Test memory deletion from ChromaDB."""
+        """Test memory deletion from database."""
         # Create and delete a memory
         content = "Memory to delete"
         memory_id = self.memory_system.add_note(content)
@@ -240,12 +295,12 @@ class TestAgenticMemorySystem(unittest.TestCase):
         memory = self.memory_system.read(memory_id)
         self.assertIsNone(memory)
         
-        # Verify memory is removed from ChromaDB
+        # Verify memory is removed from the database
         results = self.memory_system.search_agentic(content, k=1)
         self.assertEqual(len(results), 0)
         
     def test_memory_consolidation(self):
-        """Test memory consolidation with ChromaDB."""
+        """Test memory consolidation with database storage."""
         # Create multiple memories
         contents = [
             "Memory 1",

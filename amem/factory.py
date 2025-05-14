@@ -12,7 +12,7 @@ from typing import Dict, Optional, Any, Union
 import os
 import logging
 from amem.embedding.providers import EmbeddingProvider, LiteLLMEmbedding
-from amem.retrievers import ChromaRetriever, QdrantRetriever
+from amem.retrievers import FalkorDBRetriever
 from amem.llm_controller import LLMController
 
 logger = logging.getLogger(__name__)
@@ -84,54 +84,34 @@ class RetrieverFactory:
     """Factory for creating vector database retrievers."""
     
     @staticmethod
-    def create(config: Dict[str, Any], embedding_provider: Optional[EmbeddingProvider] = None) -> Union[QdrantRetriever, ChromaRetriever]:
-        """Create a vector database retriever based on configuration.
+    def create(config: Dict[str, Any], embedding_provider: Optional[EmbeddingProvider] = None) -> FalkorDBRetriever:
+        """Create a retriever based on configuration.
         
         Args:
             config: Configuration dictionary containing vector_db settings
             embedding_provider: Optional embedding provider to use
             
         Returns:
-            An instance of QdrantRetriever or ChromaRetriever
+            An instance of FalkorDBRetriever
         """
         vector_db_config = config.get("vector_db", {})
-        db_type = vector_db_config.get("type", "qdrant")
         
-        if db_type == "qdrant":
-            try:
-                # Get Qdrant configuration
-                qdrant_config = vector_db_config.get("qdrant", {})
-                
-                # Use environment variable for collection if available
-                collection_name = os.getenv("QDRANT_COLLECTION") or qdrant_config.get("collection", "memories")
-                host = qdrant_config.get("host", "localhost")
-                port = qdrant_config.get("port", 7333)
-                
-                # Initialize Qdrant retriever
-                retriever = QdrantRetriever(
-                    collection_name=collection_name,
-                    host=host,
-                    port=port,
-                    embedding_provider=embedding_provider
-                )
-                logger.info(f"Created Qdrant retriever with collection '{collection_name}'")
-                return retriever
-            except Exception as e:
-                logger.warning(f"Could not initialize Qdrant retriever: {e}")
-                logger.warning("Falling back to ChromaDB retriever")
+        # Get FalkorDB configuration
+        falkordb_config = vector_db_config.get("falkordb", {})
         
-        # If we get here, either config was ChromaDB or Qdrant failed
-        try:
-            # First try to reset the collection if it exists
-            collection_name = vector_db_config.get("chroma", {}).get("collection", "memories")
-            temp_retriever = ChromaRetriever(collection_name=collection_name)
-            temp_retriever.client.reset()
-        except Exception as e:
-            logger.warning(f"Could not reset ChromaDB collection: {e}")
-            
-        # Create a fresh retriever instance
-        retriever = ChromaRetriever(collection_name=collection_name)
-        logger.info(f"Created ChromaDB retriever with collection '{collection_name}'")
+        # Use environment variable for collection if available
+        collection_name = os.getenv("FALKORDB_COLLECTION") or falkordb_config.get("collection", "memories")
+        host = falkordb_config.get("host", "localhost")
+        port = falkordb_config.get("port", 7379)
+        
+        # Initialize FalkorDB retriever
+        retriever = FalkorDBRetriever(
+            collection_name=collection_name,
+            host=host,
+            port=port,
+            embedding_provider=embedding_provider
+        )
+        logger.info(f"Created FalkorDB retriever with collection '{collection_name}'")
         return retriever
 
 

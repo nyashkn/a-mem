@@ -73,20 +73,36 @@ source .venv/bin/activate  # Linux/Mac
 uv pip install -e .
 ```
 
-3. Set up Qdrant using Docker:
-```bash
-# Start Qdrant vector database
-docker-compose up -d
-```
+3. Set up the database using Docker:
+   
+   **Option 1: FalkorDB** (Recommended for improved relationship handling)
+   ```bash
+   # Start FalkorDB graph database
+   docker-compose up -d
+   ```
+
+   **Option 2: Qdrant** (Legacy vector database support)
+   ```bash
+   # To use Qdrant, edit docker-compose.yml to use Qdrant image instead of FalkorDB
+   # Then start the Docker container
+   docker-compose up -d
+   ```
 
 4. Configure environment variables:
-Create a `.env` file in the project root with the following settings (or modify the existing one):
+Create a `.env` file in the project root with the following settings (or copy from `.env.example`):
 
 ```bash
-# Vector Database (qdrant)
-VECTOR_DB_TYPE=qdrant
-QDRANT_HOST=localhost
-QDRANT_PORT=7333
+# Database configuration (FalkorDB - Recommended)
+VECTOR_DB_TYPE=falkordb
+FALKORDB_HOST=localhost
+FALKORDB_PORT=
+FALKORDB_COLLECTION=memories
+
+# Or use Qdrant (Legacy)
+# VECTOR_DB_TYPE=qdrant
+# QDRANT_HOST=localhost
+# QDRANT_PORT=7333
+# QDRANT_COLLECTION=memories
 
 # Embedding Provider (AWS Bedrock with Cohere)
 EMBEDDING_PROVIDER=litellm
@@ -100,9 +116,6 @@ LLM_BACKEND=openai
 LLM_MODEL=meta-llama/llama-4-maverick
 LLM_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_API_KEY=your_openrouter_api_key
-
-# Collection name
-QDRANT_COLLECTION=memories
 ```
 
 5. Setup Verification ✅

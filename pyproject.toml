@@ -16,6 +16,7 @@ dependencies = [
     
     # Vector database and cloud services
     "qdrant-client>=1.7.0",
+    "falkordb>=1.1.1", 
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
     
